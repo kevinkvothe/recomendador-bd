@@ -3,62 +3,73 @@
 
 from sklearn.neighbors import NearestNeighbors
 import numpy as np
+import pandas as pd
+import warnings
+warnings.filterwarnings('ignore')
 
-NP = 100     # Number of Products
-NU = 100     # Number of users
+# Importamos los datos
+ratings = pd.read_csv("./Datos/ratings.dat", sep = "::", header = None, names = ["UserID", "MovieID", "Rating", "Timestamp"])
+movies = pd.read_csv("./Datos/movies.dat", sep = "::", header = None, names = ["MovieID", "Title", "Genres"])
 
-# Creamos las matrices de usuarios-producto (inventory) y de similaridad entre productos (similarity)
-inventory = np.random.randint(2, size = (NU, NP))
-similarity = np.random.rand(NP,NP)
+# Vamos a crear dos matrices a partir de los usuarios, los nombres de las películas y si han visto la película o no, a partir de esto realizaremos
+# una recomendación por usuarios usando kneighbors y posteriormente una recomendación individual usando la correlación entre películas.
 
-for i in range(NP):
-  for j in range(i, NP):
-      similarity[j,i] = similarity[i,j]
-  similarity[i,i] = 1
+# Comenzamos creando la matriz de ratings.
+ratings_matrix = ratings.pivot_table(index = "UserID", columns = "MovieID", values = "Rating")
+ratings_matrix_bin = np.where(np.isnan(ratings_matrix), 0, 1)
 
-print(inventory)
-print(similarity)
+ratings_matrix_cop = pd.DataFrame(ratings_matrix)
+movie_id = ratings_matrix_cop.columns.values
+users_id = ratings_matrix_cop.index
+# ratings_matrix = np.matrix(ratings_matrix)
 
-# Calculamos los vecinos mas proximos (3) al user_id
+# Calculamos los vecinos mas proximos (3) al user_id (0 por defecto).
 user_id = 0
-nbrs = NearestNeighbors(n_neighbors=3).fit(inventory)
-distances, indices = nbrs.kneighbors(inventory)
+nbrs = NearestNeighbors(n_neighbors=3).fit(ratings_matrix_bin)
+distances, indices = nbrs.kneighbors([ratings_matrix_bin[user_id]])
 
-print("Distancias y vecinos: ", distances[user_id], indices[user_id])
+print("Distancias y vecinos al usuario con UserID = ", user_id, ":",  distances, indices)
 
 # Criterio de recomendacion: el mas similar al preferido por el usuario y no escogido todavia
 # Primero calculamos las diferencia entre los productos comprados por el user_id  y su vecino
 
 # Calculamos las diferencias con todos los vecinos primero
-difs = inventory - inventory[user_id]
-vecino = indices[user_id][1]   # 2ndo vecino, el primero es el mismo
-print(vecino, difs[vecino])    # los 1's son los posibles productos a recomendar: comprados por vecino y no por user_id
+difs = ratings_matrix_bin - ratings_matrix_bin[user_id]
+vecino = indices[0, 1]   # 2ndo vecino, el primero es el mismo
+print(vecino, difs[vecino])   # los 1's son los posibles productos a recomendar: comprados por vecino y no por user_id
 posibles = (difs[vecino]  == 1)
-Lposibles = np.asarray(np.where(posibles == True))[0]   # Lista de posibles productos a recomedar, sin valorar
+Lposibles = movie_id[posibles]  # Lista de posibles películas a recomedar, sin valorar.
 
-#print("Similarity: \n", similarity)
-# Cual de ellos es el mejor ... el que mas similar a los productos que compra user_id
-# Valoracion de los posibles productos en base a la similitud con los que compra user_id
+# Observamos las películas vistas por el user_id.
+vistas = movie_id[np.where(ratings_matrix_bin[user_id] == 1)[0]]
+
+print("Películas vistas por el usuario: ")
+for i in vistas:
+    print(movies.iloc[np.where(movies.MovieID == i)[0], :])
+
+print("Películas Posibles: ")
+for i in Lposibles:
+    print(movies.iloc[np.where(movies.MovieID == i)[0], :])
+
+# Ahora vamos a trabajar con la matriz ratings_matrix, buscando la correlación entre películas a partir de las valoraciones de usuarios.
 if len(Lposibles > 0):
+
     Lscores = []
+
     for p in Lposibles:
-        # score p
-        score = 0
 
-        for i in range(len(inventory[user_id])):
-            if inventory[user_id][i] == 1:
-                score += similarity[i][p]
-        Lscores.append(score)
+        # Guardamos la matriz de ratings de la p ésima película a recomendar.
+        ratings_matrix_pos = ratings_matrix[p]
 
-        # Está mal, no valora la realidad.
-        # for up in inventory[user_id]:
-        #     if up == 1:
-        #         score += similarity[up][p]
-        # Lscores.append(score)
-    # Similitud del primer producto posible con todos los comprados por user_id
-    # similarity[np.where(inventory[user_id] == 1)][:, Lposibles[0]].sum()
+        # Guardamos la matriz de ratings de las películas vistas por el usuario UserID.
+        ratings_matrix_user = ratings_matrix[vistas]
 
-    print("Posibles productos: ", Lposibles)
-    print("Scores: ", Lscores)
+        # Calculamos la similitud entre la película posible y las vistas por el usuario.
+        simil = pd.DataFrame(ratings_matrix_user.corrwith(ratings_matrix_pos))
+
+        # Almacenamos la suma de las correlaciones de la posible película con las vistas.
+        Lscores.append(simil.sum()[0])
+
     irecom = int(np.array(Lscores).argmax())
-    print("Recomendacion Final: ", irecom, Lposibles[irecom]) 
+    print("Recomendacion Final: ")
+    print(movies.iloc[np.where(movies.MovieID == Lposibles[irecom])[0], :])
