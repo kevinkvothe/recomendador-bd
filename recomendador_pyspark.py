@@ -19,7 +19,7 @@ from pyspark import SparkContext
 from pyspark.sql import SQLContext
 from pyspark.sql import SparkSession
 
-sc = SparkContext(master = "local[2]")
+sc = SparkContext(master = "local[*]")
 sqlContext = SQLContext(sc)
 spark = SparkSession.builder.getOrCreate()
 
@@ -40,17 +40,82 @@ moviesRDD = parts2.map(lambda p: Row(MovieID = int(p[0]), Title = str(p[1]), Gen
 
 # Lo transformamos en Dataframe.
 ratings = spark.createDataFrame(ratingsRDD)
+ratings = ratings.drop('Timestamp')
+
 movies = spark.createDataFrame(moviesRDD)
 
-(training, test) = ratings.randomSplit([0.8, 0.2])
+# Resumen de los datos.
+# ratings.describe().show()
 
-
-movies = pd.read_csv("./Datos/movies.dat", sep = "::", header = None, names = ["MovieID", "Title", "Genres"])
+# (training, test) = ratings.randomSplit([0.8, 0.2])
 
 # Vamos a crear dos matrices a partir de los usuarios, los nombres de las películas y si han visto la película o no, a partir de esto realizaremos
 # una recomendación por usuarios usando kneighbors y posteriormente una recomendación individual usando la correlación entre películas.
 
-# Comenzamos creando la matriz de ratings.
+# Comenzamos creando la matriz de ratings. Sustituiremos los valores por 1 o 0 según han visto o no la película.
+
+# Guardamos los valores únicos de películas y usuarios.
+distinct_movies = ratings.select('MovieID').distinct().count()
+distinct_users = ratings.select('UserID').distinct().count()
+
+# Pivotamos sobre UserID y MovieID con la media (avg) de reating. Obtendremos una tabla con filas
+# UserID, columnas MovieID y los valores medios de las valoraciones para cada combinación enmedio.
+ratings_pivoted = ratings.groupBy("UserID").pivot("MovieID").avg("Rating")
+
+# También creamos una tabla de contingencia que nos indique cuantas veces se produce la combinación
+# de UserID y MovieID.
+crossed = ratings.crosstab("UserID", "MovieID")
+
+# Comprobamos que ambas tablas tengan las dimensiones correctas.
+cierto = True if distinct_users == ratings_pivoted.count() else False
+print("El número de filas de la tabla de ratings es correcto: ", cierto)
+
+cierto = True if distinct_movies == len(ratings_pivoted.columns) - 1 else False
+print("El número de columnas de la tabla de ratings es correcto: ", cierto)
+
+cierto = True if distinct_users == crossed.count() else False
+print("El número de filas de la tabla de contingencia es correcto: ", cierto)
+
+cierto = True if distinct_movies == len(crossed.columns) - 1 else False
+print("El número de columnas de la tabla de contingencia es correcto: ", cierto)
+
+# Así pues, vamos a usar la tabla de contingencia para obtener un KMeans de 100 clústers,
+# de esa forma encontraremos como pareja del seleccionado por una variable user_id al
+# perteneciente a su mismo cluster.
+
+# Definimos el user_id y el número de clusters
+user_id = 1
+n_clus = 100 # distinct_users / 2 if distinct_users % 2 == 0 else distinct_users / 2 - 1
+
+# Transformamos la matriz para el KMeans.
+
+# from pyspark.ml.linalg import Vectors
+from pyspark.ml.feature import VectorAssembler
+
+vec_assembler = VectorAssembler(inputCols = crossed.columns[1:], outputCol='features')
+
+kmeans_data = vec_assembler.transform(crossed)
+
+# kmeans_data.show(5)
+
+# Ajustamos el kmeans.
+
+from pyspark.ml.clustering import KMeans
+from pyspark.ml.evaluation import ClusteringEvaluator
+
+
+kmeans = KMeans(featuresCol='features', k = n_clus)
+model = kmeans.fit(kmeans_data)
+
+# Importamos las librerías.
+
+
+
+
+
+
+
+
 ratings_matrix = ratings.pivot_table(index = "UserID", columns = "MovieID", values = "Rating")
 ratings_matrix_bin = np.where(np.isnan(ratings_matrix), 0, 1)
 
