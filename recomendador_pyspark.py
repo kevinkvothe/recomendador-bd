@@ -20,12 +20,12 @@ from pyspark import SparkContext
 from pyspark.sql import SQLContext
 from pyspark.sql import SparkSession
 
-SparkContext.setSystemProperty('spark.executor.memory', '14g')
+# SparkContext.setSystemProperty('spark.executor.memory', '14g')
 sc = SparkContext(master = "local[*]")
 sqlContext = SQLContext(sc)
 spark = SparkSession.builder.getOrCreate()
 
-sc._conf.getAll()
+# sc._conf.getAll()
 
 
 # Importamos los datos
@@ -147,51 +147,39 @@ print(Lposibles)
 
 ratings_pivoted_filled = ratings_pivoted.fillna(0)
 
-# Elegimos 2 vectores
 
-#x = [int(row['1']) for row in ratings_pivoted_filled.select('1').collect()]
-#x = sc.parallelize(x)
+import pyspark.sql.functions as func
 
-#y = [int(row['2']) for row in ratings_pivoted_filled.select('2').collect()]
-#y = sc.parallelize(y)
+def cosine_similarity(df, col1, col2):
+    df_cosine = df.select(func.sum(df[col1] * df[col2]).alias('dot'),
+                          func.sqrt(func.sum(df[col1]**2)).alias('norm1'),
+                          func.sqrt(func.sum(df[col2] **2)).alias('norm2'))
+    d = df_cosine.rdd.collect()[0].asDict()
+    return d['dot']/(d['norm1'] * d['norm2'])
 
-from pyspark.mllib.stat import Statistics
+cosine_similarity(ratings_pivoted_filled, '1', '2') # output 0.989949
 
-x = ratings_pivoted_filled.select('1')
-v1 = ratings_pivoted_filled.flatMap(lambda x: Vectors.dense(x['1']))
+from pyspark.mllib import linalg
 
-y = ratings_pivoted_filled.select('2')
-v2 = df.flatMap(lambda x: Vectors.dense(x[col_idx_1]))
+ratings_pivoted_filled.corr('1', '2')
 
-x = sc.parallelize([1, 5, 10])
-y = sc.parallelize([4.0, 5.0, 3.0])
-
-Statistics.corr(x, y)
-
-ratings_pivoted_filled
-
-ratings_pivoted_filled.columns[0:5]
-
-ratings_pivoted_filled.show(5)
 # Ahora vamos a trabajar con la matriz ratings_pivoted, buscando la correlación entre películas a partir de las valoraciones de usuarios.
-if len(Lposibles > 0):
+if Lposibles.shape[0] > 0:
 
     Lscores = []
 
     for p in Lposibles:
 
-        # Guardamos la matriz de ratings de la p ésima película a recomendar.
-        ratings_matrix_pos = ratings_matrix[p]
+        simil = 0
 
-        # Guardamos la matriz de ratings de las películas vistas por el usuario UserID.
-        ratings_matrix_user = ratings_matrix[vistas]
+        for u in vistas_user:
 
-        # Calculamos la similitud entre la película posible y las vistas por el usuario.
-        simil = pd.DataFrame(ratings_matrix_user.corrwith(ratings_matrix_pos))
+            # Calculamos la similitud entre la película posible y las vistas por el usuario.
+            simil = simil + cosine_similarity(ratings_pivoted_filled, p, u) #ratings_pivoted_filled.corr(p, u)
 
         # Almacenamos la suma de las correlaciones de la posible película con las vistas.
-        Lscores.append(simil.sum()[0])
+        Lscores.append(simil)
 
     irecom = int(np.array(Lscores).argmax())
     print("Recomendacion Final: ")
-    print(movies.iloc[np.where(movies.MovieID == Lposibles[irecom])[0], :])
+    print(movies.filter(movies.MovieID == Lposibles[irecom]).select('Title').show())
