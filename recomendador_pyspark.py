@@ -11,17 +11,21 @@ from pyspark.sql import Row
 from pyspark.ml.recommendation import ALS
 try:
     sc.stop()
+    print("Stopped and restarted")
 except:
-    print("")
+    print("Nothing to stop")
 
 
 from pyspark import SparkContext
 from pyspark.sql import SQLContext
 from pyspark.sql import SparkSession
 
+SparkContext.setSystemProperty('spark.executor.memory', '14g')
 sc = SparkContext(master = "local[*]")
 sqlContext = SQLContext(sc)
 spark = SparkSession.builder.getOrCreate()
+
+sc._conf.getAll()
 
 
 # Importamos los datos
@@ -44,9 +48,6 @@ ratings = ratings.drop('Timestamp')
 
 movies = spark.createDataFrame(moviesRDD)
 
-# Resumen de los datos.
-# ratings.describe().show()
-
 # (training, test) = ratings.randomSplit([0.8, 0.2])
 
 # Vamos a crear dos matrices a partir de los usuarios, los nombres de las películas y si han visto la película o no, a partir de esto realizaremos
@@ -66,6 +67,9 @@ ratings_pivoted = ratings.groupBy("UserID").pivot("MovieID").avg("Rating")
 # de UserID y MovieID.
 crossed = ratings.crosstab("UserID", "MovieID")
 
+# Necesitaremos los id de los usuarios posteriormente.
+users_total_id = [int(row['UserID_MovieID']) for row in crossed.select('UserID_MovieID').collect()]
+
 # Comprobamos que ambas tablas tengan las dimensiones correctas.
 cierto = True if distinct_users == ratings_pivoted.count() else False
 print("El número de filas de la tabla de ratings es correcto: ", cierto)
@@ -84,25 +88,18 @@ print("El número de columnas de la tabla de contingencia es correcto: ", cierto
 # perteneciente a su mismo cluster.
 
 # Definimos el user_id y el número de clusters
-user_id = 1
+user_id_position = 1
 n_clus = 100 # distinct_users / 2 if distinct_users % 2 == 0 else distinct_users / 2 - 1
 
 # Transformamos la matriz para el KMeans.
-
 # from pyspark.ml.linalg import Vectors
 from pyspark.ml.feature import VectorAssembler
 
 vec_assembler = VectorAssembler(inputCols = crossed.columns[1:], outputCol='features')
-
 kmeans_data = vec_assembler.transform(crossed)
 
-# kmeans_data.show(5)
-
 # Ajustamos el kmeans.
-
 from pyspark.ml.clustering import KMeans
-# from pyspark.ml.evaluation import ClusteringEvaluator
-
 
 kmeans = KMeans(featuresCol='features', k = n_clus)
 model = kmeans.fit(kmeans_data)
@@ -110,67 +107,73 @@ model = kmeans.fit(kmeans_data)
 # Obtenemos las predicciones (esto añade una columna "prediction" al dataframe).
 predictions = model.transform(kmeans_data)
 
-# Buscamos el clúster al que pertenece nuestro usuario con UserID = 1.
-predictions.filter(predictions.UserID_MovieID == 1).show()
+# Buscamos el clúster al que pertenece nuestro usuario en la posición 1 (0 en python, el primero).
+user_id = users_total_id[user_id_position]
+predictions.filter(predictions.UserID_MovieID == user_id).show()
 
 cluster_id = predictions.filter(predictions.UserID_MovieID == 1).select('prediction').collect()[0]['prediction']
 print("El clúster que buscamos es el :", cluster_id)
 
+
 # Filtramos los usuarios pertenecientes a el cluster buscado y seleccionamos uno aleatorio.
-
 possible_users = predictions.filter(predictions.prediction == cluster_id).filter(predictions.UserID_MovieID != 1).select('UserID_MovieID')
-possible_users.show()
 
-# Evaluamos el rendimiento
+# Seleccionamos uno aleatorio a partir del cual recomendar películas a user_id.
+similar_user = np.random.randint(possible_users.count())
+similar_user_movies = predictions.filter(predictions.UserID_MovieID == possible_users.collect()[similar_user]['UserID_MovieID'])
 
-evaluator = ClusteringEvaluator()
-silhouette = evaluator.evaluate(predictions)
-print("Silhouette with squared euclidean distance = " + str(silhouette))
+# Calculamos las diferencias con el vector del usuario seleccionado con el similar. Primero definimos dos arrays.
+similar_user_movies_array = np.array(similar_user_movies.drop("UserID_MovieID", "features", "prediction").collect())
+user_movies_array = np.array(predictions.filter(predictions.UserID_MovieID == 1).drop("UserID_MovieID", "features", "prediction").collect())
 
+# Y ahora la diferencia.
+diff = similar_user_movies_array - user_movies_array
 
+# Los códigos de las películas.
+id_peliculas = np.array(similar_user_movies.drop("UserID_MovieID", "features", "prediction").columns)
 
+# Ahora, las posiciones de las posibles películas (las que tengan valor 1).
+Lposibles = id_peliculas[np.where(diff == 1)[1]]
 
+# Y las películas vistas por el usuario user_id.
+vistas_user = id_peliculas[np.where(user_movies_array == 1)[1]]
 
-
-
-
-ratings_matrix = ratings.pivot_table(index = "UserID", columns = "MovieID", values = "Rating")
-ratings_matrix_bin = np.where(np.isnan(ratings_matrix), 0, 1)
-
-ratings_matrix_cop = pd.DataFrame(ratings_matrix)
-movie_id = ratings_matrix_cop.columns.values
-users_id = ratings_matrix_cop.index
-# ratings_matrix = np.matrix(ratings_matrix)
-
-# Calculamos los vecinos mas proximos (3) al user_id (0 por defecto).
-user_id = 0
-nbrs = NearestNeighbors(n_neighbors=3).fit(ratings_matrix_bin)
-distances, indices = nbrs.kneighbors([ratings_matrix_bin[user_id]])
-
-print("Distancias y vecinos al usuario con UserID = ", user_id, ":",  distances, indices)
-
-# Criterio de recomendacion: el mas similar al preferido por el usuario y no escogido todavia
-# Primero calculamos las diferencia entre los productos comprados por el user_id  y su vecino
-
-# Calculamos las diferencias con todos los vecinos primero
-difs = ratings_matrix_bin - ratings_matrix_bin[user_id]
-vecino = indices[0, 1]   # 2ndo vecino, el primero es el mismo
-print(vecino, difs[vecino])   # los 1's son los posibles productos a recomendar: comprados por vecino y no por user_id
-posibles = (difs[vecino]  == 1)
-Lposibles = movie_id[posibles]  # Lista de posibles películas a recomedar, sin valorar.
-
-# Observamos las películas vistas por el user_id.
-vistas = movie_id[np.where(ratings_matrix_bin[user_id] == 1)[0]]
-
-print("Películas vistas por el usuario: ", users_id[user_id])
-for i in vistas:
-    print(movies.iloc[np.where(movies.MovieID == i)[0], :])
+# Mostramos las películas vistas y posibles.
+print("Películas vistas por el usuario: ", user_id)
+print(vistas_user)
 
 print("Películas Posibles: ")
-for i in Lposibles:
-    print(movies.iloc[np.where(movies.MovieID == i)[0], :])
+print(Lposibles)
 
-# Ahora vamos a trabajar con la matriz ratings_matrix, buscando la correlación entre películas a partir de las valoraciones de usuarios.
+ratings_pivoted_filled = ratings_pivoted.fillna(0)
+
+# Elegimos 2 vectores
+
+#x = [int(row['1']) for row in ratings_pivoted_filled.select('1').collect()]
+#x = sc.parallelize(x)
+
+#y = [int(row['2']) for row in ratings_pivoted_filled.select('2').collect()]
+#y = sc.parallelize(y)
+
+from pyspark.mllib.stat import Statistics
+
+x = ratings_pivoted_filled.select('1')
+v1 = ratings_pivoted_filled.flatMap(lambda x: Vectors.dense(x['1']))
+
+y = ratings_pivoted_filled.select('2')
+v2 = df.flatMap(lambda x: Vectors.dense(x[col_idx_1]))
+
+x = sc.parallelize([1, 5, 10])
+y = sc.parallelize([4.0, 5.0, 3.0])
+
+Statistics.corr(x, y)
+
+ratings_pivoted_filled
+
+ratings_pivoted_filled.columns[0:5]
+
+ratings_pivoted_filled.show(5)
+# Ahora vamos a trabajar con la matriz ratings_pivoted, buscando la correlación entre películas a partir de las valoraciones de usuarios.
 if len(Lposibles > 0):
 
     Lscores = []
