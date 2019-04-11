@@ -4,7 +4,7 @@ import warnings
 warnings.filterwarnings('ignore')
 
 import findspark
-findspark.init('/home/kubote/spark/spark-2.2.0-bin-hadoop2.7/')
+findspark.init('/home/kubote/spark/spark-2.4.1-bin-hadoop2.7/')
 
 import pyspark
 from pyspark.sql import Row
@@ -101,13 +101,31 @@ kmeans_data = vec_assembler.transform(crossed)
 # Ajustamos el kmeans.
 
 from pyspark.ml.clustering import KMeans
-from pyspark.ml.evaluation import ClusteringEvaluator
+# from pyspark.ml.evaluation import ClusteringEvaluator
 
 
 kmeans = KMeans(featuresCol='features', k = n_clus)
 model = kmeans.fit(kmeans_data)
 
-# Importamos las librerías.
+# Obtenemos las predicciones (esto añade una columna "prediction" al dataframe).
+predictions = model.transform(kmeans_data)
+
+# Buscamos el clúster al que pertenece nuestro usuario con UserID = 1.
+predictions.filter(predictions.UserID_MovieID == 1).show()
+
+cluster_id = predictions.filter(predictions.UserID_MovieID == 1).select('prediction').collect()[0]['prediction']
+print("El clúster que buscamos es el :", cluster_id)
+
+# Filtramos los usuarios pertenecientes a el cluster buscado y seleccionamos uno aleatorio.
+
+possible_users = predictions.filter(predictions.prediction == cluster_id).filter(predictions.UserID_MovieID != 1).select('UserID_MovieID')
+possible_users.show()
+
+# Evaluamos el rendimiento
+
+evaluator = ClusteringEvaluator()
+silhouette = evaluator.evaluate(predictions)
+print("Silhouette with squared euclidean distance = " + str(silhouette))
 
 
 
