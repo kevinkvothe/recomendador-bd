@@ -8,7 +8,6 @@ findspark.init('/home/kubote/spark/spark-2.4.1-bin-hadoop2.7/')
 
 import pyspark
 from pyspark.sql import Row
-from pyspark.ml.recommendation import ALS
 try:
     sc.stop()
     print("Stopped and restarted")
@@ -20,7 +19,6 @@ from pyspark.sql import SQLContext
 from pyspark.sql import SparkSession
 
 sc = SparkContext(master = "local[*]")
-sqlContext = SQLContext(sc)
 sqlContext = SQLContext(sc)
 
 spark = SparkSession.builder.getOrCreate()
@@ -45,8 +43,6 @@ ratings = ratings.drop('Timestamp')
 
 movies = spark.createDataFrame(moviesRDD)
 
-# (training, test) = ratings.randomSplit([0.8, 0.2])
-
 # Vamos a crear dos matrices a partir de los usuarios, los nombres de las películas y si han visto la película o no, a partir de esto realizaremos
 # una recomendación por usuarios usando kneighbors y posteriormente una recomendación individual usando la correlación entre películas.
 
@@ -58,9 +54,8 @@ distinct_users = ratings.select('UserID').distinct().count()
 
 # Pivotamos sobre UserID y MovieID con la media (avg) de reating. Obtendremos una tabla con filas
 # UserID, columnas MovieID y los valores medios de las valoraciones para cada combinación enmedio.
-ratings_pivoted = ratings.groupBy("UserID").pivot("MovieID").avg("Rating")
 
-# ratings_pivoted.corr('110', '2')
+ratings_pivoted_avg = ratings.groupby("UserID").pivot("MovieID").avg("Rating")
 
 # También creamos una tabla de contingencia que nos indique cuantas veces se produce la combinación
 # de UserID y MovieID.
@@ -91,7 +86,6 @@ user_id_position = 1
 n_clus = 100 # distinct_users / 2 if distinct_users % 2 == 0 else distinct_users / 2 - 1
 
 # Transformamos la matriz para el KMeans.
-# from pyspark.ml.linalg import Vectors
 from pyspark.ml.feature import VectorAssembler
 
 vec_assembler = VectorAssembler(inputCols = crossed.columns[1:], outputCol='features')
@@ -108,7 +102,7 @@ predictions = model.transform(kmeans_data)
 
 # Buscamos el clúster al que pertenece nuestro usuario en la posición 1 (0 en python, el primero).
 user_id = users_total_id[user_id_position]
-# predictions.filter(predictions.UserID_MovieID == user_id).show()
+predictions.filter(predictions.UserID_MovieID == user_id).show()
 
 cluster_id = predictions.filter(predictions.UserID_MovieID == 1).select('prediction').collect()[0]['prediction']
 print("El clúster que buscamos es el :", cluster_id)
