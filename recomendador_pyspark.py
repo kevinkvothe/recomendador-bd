@@ -15,7 +15,6 @@ try:
 except:
     print("Nothing to stop")
 
-
 from pyspark import SparkContext
 from pyspark.sql import SQLContext
 from pyspark.sql import SparkSession
@@ -145,28 +144,35 @@ print(vistas_user)
 print("Películas Posibles: ")
 print(Lposibles)
 
-ratings_pivoted_filled = ratings_pivoted.fillna(0)
-
+# ratings_pivoted_filled = ratings_pivoted.fillna(0)
 
 import pyspark.sql.functions as func
 
 def cosine_similarity(df, col1, col2):
+
     df_cosine = df.select(func.sum(df[col1] * df[col2]).alias('dot'),
                           func.sqrt(func.sum(df[col1]**2)).alias('norm1'),
                           func.sqrt(func.sum(df[col2] **2)).alias('norm2'))
+
     d = df_cosine.rdd.collect()[0].asDict()
+
     return d['dot']/(d['norm1'] * d['norm2'])
 
-cosine_similarity(ratings_pivoted_filled, '1', '2') # output 0.989949
+def euclidean_distance(df, col1, col2):
 
-from pyspark.mllib import linalg
+    df_cosine = df.select(func.sqrt(func.sum((df[col1] - df[col2])**2)).alias('dot'))
 
-ratings_pivoted_filled.corr('1', '2')
+    d = df_cosine.rdd.collect()[0].asDict()
+
+    return d['dot']
+
+# euclidean_distance(ratings_pivoted, '110', '1')
 
 # Ahora vamos a trabajar con la matriz ratings_pivoted, buscando la correlación entre películas a partir de las valoraciones de usuarios.
 if Lposibles.shape[0] > 0:
 
     Lscores = []
+    i = 0
 
     for p in Lposibles:
 
@@ -174,12 +180,16 @@ if Lposibles.shape[0] > 0:
 
         for u in vistas_user:
 
+            print("Iteración ", i, " de ", Lposibles.shape[0]*vistas_user.shape[0])
+            i = i + 1
+
             # Calculamos la similitud entre la película posible y las vistas por el usuario.
-            simil = simil + cosine_similarity(ratings_pivoted_filled, p, u) #ratings_pivoted_filled.corr(p, u)
+            simil = simil + euclidean_distance(ratings_pivoted, p, u) #ratings_pivoted_filled.corr(p, u)
 
         # Almacenamos la suma de las correlaciones de la posible película con las vistas.
         Lscores.append(simil)
 
-    irecom = int(np.array(Lscores).argmax())
+
+    irecom = int(np.array(Lscores).argmin())
     print("Recomendacion Final: ")
     print(movies.filter(movies.MovieID == Lposibles[irecom]).select('Title').show())
