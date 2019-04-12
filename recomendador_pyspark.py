@@ -19,13 +19,11 @@ from pyspark import SparkContext
 from pyspark.sql import SQLContext
 from pyspark.sql import SparkSession
 
-# SparkContext.setSystemProperty('spark.executor.memory', '14g')
 sc = SparkContext(master = "local[*]")
 sqlContext = SQLContext(sc)
+sqlContext = SQLContext(sc)
+
 spark = SparkSession.builder.getOrCreate()
-
-# sc._conf.getAll()
-
 
 # Importamos los datos
 
@@ -62,6 +60,8 @@ distinct_users = ratings.select('UserID').distinct().count()
 # UserID, columnas MovieID y los valores medios de las valoraciones para cada combinación enmedio.
 ratings_pivoted = ratings.groupBy("UserID").pivot("MovieID").avg("Rating")
 
+# ratings_pivoted.corr('110', '2')
+
 # También creamos una tabla de contingencia que nos indique cuantas veces se produce la combinación
 # de UserID y MovieID.
 crossed = ratings.crosstab("UserID", "MovieID")
@@ -70,17 +70,17 @@ crossed = ratings.crosstab("UserID", "MovieID")
 users_total_id = [int(row['UserID_MovieID']) for row in crossed.select('UserID_MovieID').collect()]
 
 # Comprobamos que ambas tablas tengan las dimensiones correctas.
-cierto = True if distinct_users == ratings_pivoted.count() else False
-print("El número de filas de la tabla de ratings es correcto: ", cierto)
+# cierto = True if distinct_users == ratings_pivoted.count() else False
+# print("El número de filas de la tabla de ratings es correcto: ", cierto)
 
-cierto = True if distinct_movies == len(ratings_pivoted.columns) - 1 else False
-print("El número de columnas de la tabla de ratings es correcto: ", cierto)
+# cierto = True if distinct_movies == len(ratings_pivoted.columns) - 1 else False
+# print("El número de columnas de la tabla de ratings es correcto: ", cierto)
 
-cierto = True if distinct_users == crossed.count() else False
-print("El número de filas de la tabla de contingencia es correcto: ", cierto)
+# cierto = True if distinct_users == crossed.count() else False
+# print("El número de filas de la tabla de contingencia es correcto: ", cierto)
 
-cierto = True if distinct_movies == len(crossed.columns) - 1 else False
-print("El número de columnas de la tabla de contingencia es correcto: ", cierto)
+# cierto = True if distinct_movies == len(crossed.columns) - 1 else False
+# print("El número de columnas de la tabla de contingencia es correcto: ", cierto)
 
 # Así pues, vamos a usar la tabla de contingencia para obtener un KMeans de 100 clústers,
 # de esa forma encontraremos como pareja del seleccionado por una variable user_id al
@@ -108,11 +108,10 @@ predictions = model.transform(kmeans_data)
 
 # Buscamos el clúster al que pertenece nuestro usuario en la posición 1 (0 en python, el primero).
 user_id = users_total_id[user_id_position]
-predictions.filter(predictions.UserID_MovieID == user_id).show()
+# predictions.filter(predictions.UserID_MovieID == user_id).show()
 
 cluster_id = predictions.filter(predictions.UserID_MovieID == 1).select('prediction').collect()[0]['prediction']
 print("El clúster que buscamos es el :", cluster_id)
-
 
 # Filtramos los usuarios pertenecientes a el cluster buscado y seleccionamos uno aleatorio.
 possible_users = predictions.filter(predictions.prediction == cluster_id).filter(predictions.UserID_MovieID != 1).select('UserID_MovieID')
@@ -145,6 +144,43 @@ print("Películas Posibles: ")
 print(Lposibles)
 
 # ratings_pivoted_filled = ratings_pivoted.fillna(0)
+
+# Ahora simplemente buscaremos de las películas posibles la de mayor media.
+
+from pyspark.sql.functions import mean
+medias = ratings.groupby('MovieID').agg({'Rating': "mean"})
+
+medias_movies_id = np.array([int(row['MovieID']) for row in medias.select('MovieID').collect()])
+medias_movies_avg = [float(row['avg(Rating)']) for row in medias.select('avg(Rating)').collect()]
+
+if Lposibles.shape[0] > 0:
+
+    Lscores = []
+    i = 0
+
+    for p in Lposibles:
+
+        media = medias_movies_avg[np.where(medias_movies_id == int(p))[0][0]]
+        # media = ratings_pivoted.select(p).dropna().select(mean(p)).collect()[0]['avg(' + p + ')']
+
+        # Almacenamos la suma de las correlaciones de la posible película con las vistas.
+        Lscores.append(media)
+
+
+    irecom = int(np.array(Lscores).argmax())
+    print("Recomendacion Final: ")
+    print(movies.filter(movies.MovieID == Lposibles[irecom]).select('Title').show())
+
+
+
+
+
+
+
+
+
+
+
 
 import pyspark.sql.functions as func
 
